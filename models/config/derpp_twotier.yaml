@@ -1,0 +1,8 @@
+seq-cifar100:
+  dataset_config: xder
+  500:
+    alpha: 0.3
+    beta: 0.5
+    stm_size: 100
+    lr: 0.03
+    model: derpp_twotier
