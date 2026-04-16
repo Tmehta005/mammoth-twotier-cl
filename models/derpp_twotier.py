@@ -11,6 +11,8 @@ from models.utils.continual_model import ContinualModel
 from utils.args import add_rehearsal_args, ArgumentParser
 from utils.buffer import Buffer
 from utils.fifo_buffer import FifoBuffer
+# Consolidation strategies for STM → LTM transfer
+from utils.consolidation import get_consolidation_fn
 
 
 class DerppTwoTier(ContinualModel):
@@ -28,6 +30,12 @@ class DerppTwoTier(ContinualModel):
                             help='Weight for the logit distillation (MSE) loss.')
         parser.add_argument('--beta', type=float, required=True,
                             help='Weight for the CE replay loss.')
+        # Consolidation strategy for STM → LTM transfer
+        parser.add_argument('--strategy', type=str, default='random',
+                            choices=['random', 'diversity', 'loss', 'hybrid'],
+                            help='Consolidation strategy for STM -> LTM transfer.')
+        parser.add_argument('--consolidation_freq', type=int, default=100,
+                            help='Consolidate STM -> LTM every N training steps.')
         return parser
 
     def __init__(self, backbone, loss, args, transform, dataset=None):
@@ -37,6 +45,9 @@ class DerppTwoTier(ContinualModel):
         self.ltm = Buffer(self.args.buffer_size)
         # STM: FIFO buffer (--stm_size slots)
         self.stm = FifoBuffer(capacity=self.args.stm_size)
+        #Added consolidation function
+        self.consolidate_fn = get_consolidation_fn(self.args.strategy)
+        self.train_step = 0
 
     def observe(self, inputs, labels, not_aug_inputs, epoch=None):
         self.opt.zero_grad()
@@ -67,5 +78,24 @@ class DerppTwoTier(ContinualModel):
         self.stm.add_data(examples=not_aug_inputs,
                           labels=labels,
                           logits=outputs.data)
+        #Added consolidation step
+        self.train_step += 1
+        if (self.train_step % self.args.consolidation_freq == 0
+                and not self.stm.is_empty()):
+            self._consolidate()
 
         return loss.item()
+    #New consolidate method
+    def _consolidate(self):
+        """Push STM samples into LTM in priority order determined by strategy."""
+        stm_ex, stm_lb, stm_lo = self.stm.get_filled_data()
+        if stm_ex is None:
+            return
+
+        order = self.consolidate_fn(
+            self.stm, self.ltm, self.net, self.device)
+
+        self.ltm.add_data(
+            examples=stm_ex[order],
+            labels=stm_lb[order] if stm_lb is not None else None,
+            logits=stm_lo[order] if stm_lo is not None else None)

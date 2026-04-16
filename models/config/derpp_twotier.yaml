@@ -6,3 +6,5 @@ seq-cifar100:
     stm_size: 100
     lr: 0.03
     model: derpp_twotier
+    strategy: hybrid          # consolidation (choose from random, diversity, loss, hybrid)
+    consolidation_freq: 50    # push from STM to LTM every N training steps

@@ -52,10 +52,11 @@ class FifoBuffer:
         return self._filled_size()
 
     def add_data(self, examples: torch.Tensor, labels: torch.Tensor = None,
-                 logits: torch.Tensor = None) -> None:
+                 logits: torch.Tensor = None, **kwargs) -> None:
         """
         Insert a batch into the FIFO buffer.
         Each sample overwrites the slot at write_ptr, then write_ptr advances.
+        bms2196: Added **kwargs
         """
         if not self._initialized:
             self._init_tensors(examples, labels, logits)
@@ -66,17 +67,18 @@ class FifoBuffer:
             if labels is not None and hasattr(self, 'labels'):
                 self.labels[idx] = labels[i].to(self.device)
             if logits is not None and hasattr(self, 'logits'):
-                self.logits[idx] = logits[i].to(self.device)
+                selxsf.logits[idx] = logits[i].to(self.device)
             self.write_ptr += 1
             self.num_seen_examples += 1
 
     def get_data(self, size: int, transform: nn.Module = None,
-                 device: str = None):
+                 device: str = None, **kwargs):
         """
         Uniformly sample `size` items from the filled portion of the buffer.
 
         Returns a tuple (examples, labels, logits) for whichever attributes
         have been initialised — same tuple order as Buffer.get_data.
+        bms2196: Added **kwargs
         """
         target_device = self.device if device is None else device
         filled = self._filled_size()
@@ -93,3 +95,17 @@ class FifoBuffer:
         if hasattr(self, 'logits'):
             ret += (self.logits[choice].to(target_device),)
         return ret
+    
+    """
+    bms2196: Added get_filled_data method
+    """
+    def get_filled_data(self):
+        """Return (examples, labels, logits) tensors for all filled slots.
+        Used by consolidation strategies to score/select samples."""
+        n = self._filled_size()
+        if n == 0:
+            return None, None, None
+        ex = self.examples[:n]
+        lb = self.labels[:n] if hasattr(self, 'labels') else None
+        lo = self.logits[:n] if hasattr(self, 'logits') else None
+        return ex, lb, lo
