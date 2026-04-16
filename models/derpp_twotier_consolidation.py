@@ -1,12 +1,13 @@
-# Two-tier DER++ variant.
+# Two-tier DER++ variant with STM → LTM consolidation.
 #
-# STM (short-term memory): FIFO buffer  → used for CE replay loss
-# LTM (long-term memory):  reservoir    → used for logit/MSE distillation loss
+# STM (short-term memory): FIFO buffer  → receives every incoming batch
+# LTM (long-term memory):  reservoir    → populated ONLY via periodic
+#                                          consolidation from STM, never
+#                                          via direct per-step writes
 #
-# --buffer_size is the TOTAL memory budget.
-# LTM capacity = buffer_size - stm_size.
-#
-# Training logic is otherwise identical to models/derpp.py.
+# CE replay draws from STM; logit/MSE distillation draws from LTM.
+# Consolidation scores STM samples every --consolidation_freq steps and
+# pushes them into LTM in priority order (--strategy).
 
 import torch
 from torch.nn import functional as F
@@ -15,26 +16,20 @@ from models.utils.continual_model import ContinualModel
 from utils.args import add_rehearsal_args, ArgumentParser
 from utils.buffer import Buffer
 from utils.fifo_buffer import FifoBuffer
+from utils.consolidation import get_consolidation_fn
 
 
-class DerppTwoTier(ContinualModel):
-    """DER++ with a two-tier replay buffer (FIFO STM + reservoir LTM).
+class DerppTwoTierConsolidation(ContinualModel):
+    """Two-tier DER++ where LTM is fed exclusively via STM consolidation."""
 
-    Total memory budget = --buffer_size.
-    LTM capacity        = buffer_size - stm_size.
-    STM capacity        = stm_size.
-    """
-
-    NAME = 'derpp_twotier'
+    NAME = 'derpp_twotier_consolidation'
     COMPATIBILITY = ['class-il', 'domain-il', 'task-il', 'general-continual']
 
     @staticmethod
     def get_parser(parser) -> ArgumentParser:
         add_rehearsal_args(parser)  # provides --buffer_size, --minibatch_size
         parser.add_argument('--stm_size', type=int, required=True,
-                            help='Capacity of the FIFO short-term memory buffer. '
-                                 'Must be strictly less than --buffer_size. '
-                                 'LTM capacity = buffer_size - stm_size.')
+                            help='Capacity of the FIFO short-term memory buffer.')
         parser.add_argument('--alpha', type=float, required=True,
                             help='Weight for the logit distillation (MSE) loss.')
         parser.add_argument('--beta', type=float, required=True,
@@ -48,25 +43,32 @@ class DerppTwoTier(ContinualModel):
                             help='Fraction of the CE replay minibatch drawn from STM '
                                  'when ce_replay_mode=mixed. Must be in (0, 1). '
                                  'Default: 0.5.')
+        parser.add_argument('--strategy', type=str, default='random',
+                            choices=['random', 'diversity', 'loss', 'hybrid'],
+                            help='Consolidation strategy for STM -> LTM transfer.')
+        parser.add_argument('--consolidation_freq', type=int, default=100,
+                            help='Consolidate STM -> LTM every N training steps.')
         return parser
 
     def __init__(self, backbone, loss, args, transform, dataset=None):
         super().__init__(backbone, loss, args, transform, dataset=dataset)
 
-        assert args.stm_size < args.buffer_size, (
-            f'--stm_size ({args.stm_size}) must be strictly less than '
-            f'--buffer_size ({args.buffer_size}).')
-
         if args.ce_replay_mode == 'mixed':
             assert 0.0 < args.ce_stm_ratio < 1.0, (
                 f'--ce_stm_ratio must be in (0, 1), got {args.ce_stm_ratio}.')
 
+        assert args.stm_size < args.buffer_size, (
+            f'--stm_size ({args.stm_size}) must be strictly less than '
+            f'--buffer_size ({args.buffer_size}).')
+
         ltm_size = args.buffer_size - args.stm_size
 
-        # LTM: reservoir buffer — logit/MSE distillation source
+        # LTM: reservoir buffer — populated only via consolidation
         self.ltm = Buffer(ltm_size)
-        # STM: FIFO buffer — CE replay source (wholly or partially)
-        self.stm = FifoBuffer(capacity=args.stm_size)
+        # STM: FIFO buffer — receives every incoming batch
+        self.stm = FifoBuffer(capacity=self.args.stm_size)
+        self.consolidate_fn = get_consolidation_fn(self.args.strategy)
+        self.train_step = 0
 
     def _ce_replay_batch(self, minibatch_size):
         """Return (inputs, labels) for the CE replay loss.
@@ -100,7 +102,7 @@ class DerppTwoTier(ContinualModel):
         loss = self.loss(outputs, labels)
 
         if not self.stm.is_empty() and not self.ltm.is_empty():
-            # --- logit distillation loss: replay from LTM only ---
+            # --- logit distillation loss: replay from LTM ---
             buf_inputs, _, buf_logits = self.ltm.get_data(
                 self.args.minibatch_size, transform=self.transform, device=self.device)
             buf_outputs = self.net(buf_inputs)
@@ -114,12 +116,28 @@ class DerppTwoTier(ContinualModel):
         loss.backward()
         self.opt.step()
 
-        # Both buffers receive every incoming batch independently
-        self.ltm.add_data(examples=not_aug_inputs,
-                          labels=labels,
-                          logits=outputs.data)
+        # STM receives every incoming batch directly
         self.stm.add_data(examples=not_aug_inputs,
                           labels=labels,
                           logits=outputs.data)
 
+        # LTM is never written directly — only via consolidation below
+        self.train_step += 1
+        if (self.train_step % self.args.consolidation_freq == 0
+                and not self.stm.is_empty()):
+            self._consolidate()
+
         return loss.item()
+
+    def _consolidate(self):
+        """Score all STM samples and push them into LTM in priority order."""
+        stm_ex, stm_lb, stm_lo = self.stm.get_filled_data()
+        if stm_ex is None:
+            return
+
+        order = self.consolidate_fn(self.stm, self.ltm, self.net, self.device)
+
+        self.ltm.add_data(
+            examples=stm_ex[order],
+            labels=stm_lb[order] if stm_lb is not None else None,
+            logits=stm_lo[order] if stm_lo is not None else None)

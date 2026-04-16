@@ -67,7 +67,7 @@ class FifoBuffer:
             if labels is not None and hasattr(self, 'labels'):
                 self.labels[idx] = labels[i].to(self.device)
             if logits is not None and hasattr(self, 'logits'):
-                selxsf.logits[idx] = logits[i].to(self.device)
+                self.logits[idx] = logits[i].to(self.device)
             self.write_ptr += 1
             self.num_seen_examples += 1
 
