@@ -135,7 +135,7 @@ class DerppTwoTierConsolidation(ContinualModel):
         if stm_ex is None:
             return
 
-        order = self.consolidate_fn(self.stm, self.ltm, self.net, self.device)
+        order = self.consolidate_fn(self.stm, self.ltm, self.net, self.device).cpu()
 
         self.ltm.add_data(
             examples=stm_ex[order],
