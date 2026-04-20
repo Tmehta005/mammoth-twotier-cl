@@ -8,6 +8,7 @@ checkpoints/
 *.pt
 *.pkl
 *.sh
+!scripts/*.sh
 *.txt
 json/
 out/
