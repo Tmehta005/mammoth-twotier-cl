@@ -65,10 +65,10 @@ class DerppTwoTierCrossSampling(ContinualModel):
         assert args.stm_size < args.buffer_size, (
             f'--stm_size ({args.stm_size}) must be strictly less than '
             f'--buffer_size ({args.buffer_size}).')
-        assert 0.0 < args.mse_ltm_ratio < 1.0, (
-            f'--mse_ltm_ratio must be in (0, 1), got {args.mse_ltm_ratio}.')
-        assert 0.0 < args.ce_stm_ratio < 1.0, (
-            f'--ce_stm_ratio must be in (0, 1), got {args.ce_stm_ratio}.')
+        assert 0.0 <= args.mse_ltm_ratio <= 1.0, (
+            f'--mse_ltm_ratio must be in [0, 1], got {args.mse_ltm_ratio}.')
+        assert 0.0 <= args.ce_stm_ratio <= 1.0, (
+            f'--ce_stm_ratio must be in [0, 1], got {args.ce_stm_ratio}.')
 
         ltm_size = args.buffer_size - args.stm_size
 
