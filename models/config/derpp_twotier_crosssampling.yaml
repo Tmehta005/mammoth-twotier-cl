@@ -1,0 +1,12 @@
+seq-cifar100:
+  dataset_config: xder
+  500:
+    alpha: 0.3
+    beta: 0.5
+    stm_size: 100
+    mse_ltm_ratio: 0.8
+    ce_stm_ratio: 0.5
+    lr: 0.03
+    model: derpp_twotier_crosssampling
+    strategy: hybrid
+    consolidation_freq: 50

@@ -1,0 +1,10 @@
+seq-cifar10:
+  dataset_config: default
+  200:
+    alpha: 0.5
+    beta: 0.5
+    stm_size: 50
+    mse_ltm_ratio: 0.8
+    ce_stm_ratio: 0.2
+    lr: 0.001
+    model: derpp_twotier_crosssampling_direct
